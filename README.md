@@ -1,61 +1,92 @@
-# Formal Verification of Quadratic Characterizations for Saturation Functions
+# Formal Verification of Quadratic Characterizations for tanh and Saturation
 
-This repository contains an automated pipeline that connects numerical convex optimization (Sum-of-Squares) with formal verification. It proves that a set of generated quadratic polynomials safely over-approximates a piecewise continuous saturation function over specific regions of interest (ROI). 
+This repository contains the verification files and the benchmark networks of the paper
 
-The proofs are built using interactive theorem proving (**Coq/Rocq**) and automated SMT-based deductive verification (**Frama-C / ACSL**).
+> E. Khalife, M. Farhood, and P.-L. Garoche, "Quadratic Characterizations for Reachability Analysis of Neural Networks," 2026. arXiv:2605.20482.
+
+It proves that two families of quadratic constraints safely over-approximate the graph of the hyperbolic tangent on [−20, 20] and the graph of the unit saturation function on [−5, 5]. Each constraint has the form q(x, y) = a x² + b y² + c xy + d x + e y + f ≥ 0, with x the input and y the output of the activation function.
+
+## Repository layout
+
+- `frama-c/saturation_quad_char.c` — Frama-C lemmas for the five saturation constraints.
+- `frama-c/tanh_quad_char.c` — Frama-C lemmas for the eight data-driven tanh constraints.
+- `rocq/saturation_quad_char.v` — Rocq proof of the saturation constraints.
+- `networks.zip` — the tanh benchmark networks, attached to release 1.0 (see the last section).
 
 ## Methodology Overview
 
-1. **Polynomial Synthesis (MATLAB):** Quadratic constraints are generated, to characterize the unit saturation function, using the data-driven method provided in the paper. They are then verified using Sum-of-Squares (SOS) feasibility problems. 
-2. **Foundational Proof (Rocq):** To avoid the internal limits of Cylindrical Algebraic Decomposition (CAD) in non-linear real arithmetic (`nra`), the pipeline uses exact unscaled rational fractions. It avoids complex non-linear searches by providing explicit algebraic discriminant identities, reducing the proof to linear real arithmetic (`lra`).
-3. **Deductive Verification (Frama-C):** The ROI is divided into separate subsets (left saturation, linear region, right saturation) using ACSL axioms. SMT solvers prove the over-approximation lemmas across the continuous real domain.
+1. **Generation (MATLAB):** The constraints are generated with the data-driven method of the paper on subregions of one half of the domain, and the other half is obtained by symmetry. For the saturation function, the subregions are [−5, −1.2] and [−1.5, −0.5]; together with 1 − y² ≥ 0, the family has five constraints. For tanh, the subregions are [−4, −1.5], [−2, 0], [−2, −0.7] and [−1.2, −0.5]; together with 1 − y² ≥ 0, the family has nine constraints. The saturation coefficients are rounded to six decimals and the tanh coefficients to 17 significant digits; these rounded constraints are the ones verified and used in the paper.
+
+2. **SOS Verification (MATLAB):** The saturation graph consists of three pieces (y = −1, y = x, y = 1), and each constraint is certified on each piece for x in [−100, 100]. For tanh, the graph is enclosed in narrow bands: a constant band for |x| ≥ 6 and, on eight subintervals of [−6, 6], a band around a degree-7 polynomial approximation. All 80 certificates (8 constraints × 10 bands) succeed.
+
+3. **Rocq Proof (saturation):** The proof uses exact fractions. For each constraint and each piece of the graph, it gives an explicit algebraic identity, so that Rocq only has to check linear inequalities. The proof contains no admitted steps.
+
+4. **Frama-C Verification:** The saturation lemmas state the five constraints on the three pieces of the graph, with no bound on x. For tanh, [−6, 6] is split into 11 to 15 pieces per constraint, and on each piece tanh lies in a narrow band around a straight line, computed with 50-digit arithmetic and rounded outward; the tails |x| ≥ 6 use the constant band of step 2. Each lemma is therefore a simple quadratic inequality, which Z3 and Alt-Ergo prove with their default settings. Each tanh lemma proves q ≥ τ, where the margin τ ≤ 2·10⁻¹⁴ covers the rounding of the coefficients to double precision, and is declared with `check lemma`, so that it is proved independently of the others.
 
 ## Usage & Verification
 
-To ensure reproducibility without setting up complex local environments, you can run the verification using standard Docker containers.
+The checks require Frama-C with its WP plug-in, Z3 and Alt-Ergo, and Rocq. The outputs below were obtained with Z3 4.8.12 and Alt-Ergo 2.5.4.
 
-### 1. Frama-C / ACSL Verification
-Using the `frama-c/frama-c` Docker image, execute the following command to verify the constraints using Z3 and Alt-Ergo:
+### 1. Frama-C Verification
+
+**Saturation:**
 
 ```bash
-frama-c -wp -wp-model real -wp-cache none -wp-timeout 30 -wp-prover z3,alt-ergo saturation_quad_char.c
+frama-c -wp -wp-cache none -wp-model real -wp-timeout 60 -wp-prover z3,alt-ergo frama-c/saturation_quad_char.c
 ```
 
-**Verification Results:**
-All 21 scheduled goals are successfully proven by the SMT solvers in under a second.
+All goals are proven: the 21 lemmas and two automatic checks on the empty `main` function.
+
 ```text
 [kernel] Parsing saturation_quad_char.c (with preprocessing)
 [wp] Warning: Missing RTE guards
 [wp] 21 goals scheduled
-[wp] Proved goals:   21 / 21
-  Qed:             0
-  Alt-Ergo :      12 (5ms-16ms-88ms)
-  Z3 4.13.3:       9 (10ms-33ms-130ms)
-[wp:pedantic-assigns] saturation_quad_char.c:250: Warning: 
+[wp] Proved goals:   23 / 23
+  Terminating:       1
+  Unreachable:       1
+  Qed:               0
+  Alt-Ergo 2.5.4:   12 (8ms-13ms-50ms)
+  Z3 4.8.12:         9 (11ms-62ms-298ms)
+[wp:pedantic-assigns] saturation_quad_char.c:250: Warning:
   No 'assigns' specification for function 'main'.
   Callers assumptions might be imprecise.
 ```
-*(Note: The RTE and assigns warnings are expected because Frama-C is analyzing a purely logical C file without memory assignments).*
 
-### 2. Rocq Foundational Proof
-Using the `coqorg/coq` Docker image, compile the interactive proof script:
+*(The two warnings are expected: the file contains only definitions and lemmas.)*
+
+**tanh:**
 
 ```bash
-coqc saturation_quad_char.v
+frama-c -wp -wp-cache none -wp-model real -wp-timeout 60 -wp-prover z3,alt-ergo frama-c/tanh_quad_char.c
 ```
 
-**Verification Results:**
-The command runs without output, meaning the Rocq kernel has formally checked every logical step without errors. The repository includes the resulting compiled files (`.vo`, `.vos`, `.vok`).
+All 114 goals are proven.
 
----
+```text
+[kernel] Parsing tanh_quad_char.c (with preprocessing)
+[wp] 114 goals scheduled
+[wp] Proved goals:  114 / 114
+  Qed:               0 (0.50ms-0.11ms-1ms)
+  Alt-Ergo 2.5.4:   35 (7ms-10ms-31ms)
+  Z3 4.8.12:        79 (10ms-14ms-28ms)
+```
 
-## Alternative Method for Rocq/Frama-C: Adaptive Hybrid SOS Decomposition
+### 2. Rocq Proof
 
-For highly non-linear, higher-degree, or highly complex functions where standard SMT/CAD solvers fail because the coefficients become too large, we describe an alternative **Adaptive Deflated Gram Matrix Decomposition** method.
+```bash
+coqc rocq/saturation_quad_char.v
+```
 
-### How it works:
-1. **Reduction & Cholesky Decomposition:** Instead of sending raw polynomials to the solver, the Gram matrix $Q$ is calculated for the SOS polynomials and reduced by an $\epsilon$-margin to account for floating-point errors. It then extracts the explicit squared binomial multipliers using eigenvalue/Cholesky decomposition ($Q = V \sqrt{D}$).
-2. **Proof by Abstraction (Rocq):** A Rocq proof is automatically generated. Instead of searching for Positivstellensatz certificates, Rocq simply verifies the linear addition of explicitly defined squared terms ($M_i(x)^2 \ge 0$), removing the need for complex non-linear solving.
-3. **Residual Verification (Frama-C):** A hybrid Frama-C file imports the Rocq-certified SOS abstraction as an axiom. Frama-C is then only used to prove that the difference between the original floating-point polynomial (minus the $\epsilon$-margin) and the Rocq-certified sum-of-squares expansion is within a small error tolerance.
+The command runs without output, meaning that Rocq has checked every step of the proof.
 
-This method assigns the heavy algebraic factoring to the SOS solver, the positivity proof to Rocq, and the final floating-point error checking to Frama-C. This allows formal verification to scale to more complex functions.
+## Alternative Method for Rocq/Frama-C: Hybrid SOS Decomposition
+
+For more complex functions, where the solvers fail because the polynomials and their coefficients become too large, the work can be split between the three tools:
+
+1. **Decomposition (MATLAB):** The sum-of-squares certificate is computed, shrunk by a small margin to absorb floating-point errors, and written explicitly as a sum of squared terms.
+2. **Proof by Abstraction (Rocq):** A Rocq proof is generated automatically; Rocq only checks that the sum of the given squared terms is nonnegative.
+3. **Residual Check (Frama-C):** Frama-C takes the Rocq result as an axiom and only proves that the original polynomial (minus the margin) is close enough to the certified sum of squares.
+
+## Benchmark Networks
+
+The networks of the tanh benchmark (Section VI of the paper) are provided in [`networks.zip`](https://github.com/e-khalife/quadratic_characterizations_verification/releases/download/1.0/networks.zip) (137 MB), attached to release 1.0 of this repository. The archive contains 27 folders `In_{nx}_L_{L}_N_{N}`, one per configuration, with input dimension nx in {10, 20, 40}, L in {2, 4, 6} hidden layers and width N in {16, 32, 64}. Each folder holds 100 files `model_{k}.mat` with the weights `W{l}` and biases `b{l}`, l = 1, …, L+1, of a network with random weights, tanh activations and two outputs. The input set is ‖x‖∞ ≤ 1, and the preactivation bounds of every network lie within [−20, 20], the domain on which the tanh characterization is verified. The ACAS Xu networks are the standard release of Katz et al. (CAV 2017) and are not included.
